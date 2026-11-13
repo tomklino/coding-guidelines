@@ -4,6 +4,53 @@ A reusable reference based on Katavti's TypeScript server/client architecture. U
 
 **Scope:** application boundaries, framework choices, server configuration, local development, and Kubernetes deployment. Examples use a fictional application named `example`, the environment prefix `APP_`, and API prefix `/api/v1`. Rename these consistently. These examples are recommended templates, not files already implemented in Katavti.
 
+## Top rule: source code must be readable by humans
+
+**Optimize source for human reading, never for compactness. This applies to all handwritten and agent-generated code. Minification belongs only in build output.** Do not submit compressed imports, multiple statements packed onto one line, or single-line implementations of complex workflows.
+
+- Put each statement and declaration on its own line; expand control-flow blocks with braces and indentation. Do not chain unrelated state changes with semicolons.
+- Format imports consistently and group them by external dependencies, internal modules, and types. Let the formatter wrap long import lists.
+- Give complex operations named intermediate steps and meaningful variable names. Make state transitions, early returns, asynchronous boundaries, and error handling visible.
+- Separate distinct workflows when a module becomes difficult to follow. Formatting does not replace clear responsibilities.
+- Use **Prettier** with a committed project configuration. Format before submitting changes and require a formatting check in CI. Do not skip formatting to save tokens or reduce file length.
+
+```ts
+async function switchSession(id: string) {
+  if (!guard(false)) {
+    return;
+  }
+
+  await save();
+
+  state.activeId = id;
+  state.error = '';
+}
+```
+
+Example `.prettierrc.json`:
+
+```json
+{
+  "singleQuote": true,
+  "semi": true,
+  "tabWidth": 2,
+  "printWidth": 100
+}
+```
+
+Install Prettier as a development dependency and commit the resulting lockfile. Merge these scripts into the root package manifest so server and client are both covered:
+
+```json
+{
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  }
+}
+```
+
+Commit a `.prettierignore` excluding generated output, dependencies, runtime data, and local artifacts (for example `dist/`, `client/dist/`, `node_modules/`, `client/node_modules/`, `data/`, and `.ui-review/`). Do not exclude maintained source, including locally owned shadcn-vue components. Run `npm run format:check` in CI before accepting changes. Prettier handles layout but does not enforce every readability rule above; review compressed control flow and tangled responsibilities even when formatting passes. All code examples in this guide should follow the same formatting conventions.
+
 ## 1. Architecture and framework choices
 
 Use two independently buildable applications, exposed through one browser origin:
@@ -21,15 +68,15 @@ Browser: https://app.example.com
   services + storage adapters
 ```
 
-| Concern | Katavti implementation | Reusable guideline |
-| --- | --- | --- |
-| Server | Hono with `@hono/node-server` | Small route modules; standard Request/Response APIs; Node only at infrastructure boundaries. |
-| Server language | Strict TypeScript, ESM, `NodeNext` | Compile server code; use `.js` extensions in relative server imports so emitted ESM runs directly. |
-| Browser | Vue 3 single-file components | Views compose components; components render state and emit intent. |
-| Browser tooling | Vite, `@vitejs/plugin-vue`, `vue-tsc` | Use Vite for development/builds and run type checking separately or before build. |
-| Routing/state | Vue Router 4, Vuex 4 | Make navigation explicit; centralize shared workflows. Vuex is the existing choice, not a requirement for every new project. |
-| Tests | Vitest, Vue Test Utils/jsdom, Playwright | Test business boundaries independently, then HTTP and browser integration. |
-| Production runtime | Node API + nginx static client | Ship compiled artifacts; no Vite or TypeScript watcher in production. |
+| Concern            | Katavti implementation                   | Reusable guideline                                                                                                           |
+| ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Server             | Hono with `@hono/node-server`            | Small route modules; standard Request/Response APIs; Node only at infrastructure boundaries.                                 |
+| Server language    | Strict TypeScript, ESM, `NodeNext`       | Compile server code; use `.js` extensions in relative server imports so emitted ESM runs directly.                           |
+| Browser            | Vue 3 single-file components             | Views compose components; components render state and emit intent.                                                           |
+| Browser tooling    | Vite, `@vitejs/plugin-vue`, `vue-tsc`    | Use Vite for development/builds and run type checking separately or before build.                                            |
+| Routing/state      | Vue Router 4, Vuex 4                     | Make navigation explicit; centralize shared workflows. Vuex is the existing choice, not a requirement for every new project. |
+| Tests              | Vitest, Vue Test Utils/jsdom, Playwright | Test business boundaries independently, then HTTP and browser integration.                                                   |
+| Production runtime | Node API + nginx static client           | Ship compiled artifacts; no Vite or TypeScript watcher in production.                                                        |
 
 Keep lockfiles committed and use `npm ci` in CI and image builds. Pin and test a supported Node version across local tooling, CI, and containers. Katavti has separate root/server and client package manifests and lockfiles; it is not an npm-workspaces setup. New projects may use workspaces, but should not combine both dependency models accidentally.
 
@@ -45,7 +92,7 @@ server/
     app.ts                   # HTTP composition, no listening socket
     config/
       index.ts               # source loading, merging, normalization
-      schema.ts              # one authoritative runtime schema
+      schema.ts              # core schema and composed validation pipeline
     routes/<feature>/index.ts
     services/                # workflows, authentication, domain operations
     data-modules/            # persistence contracts + implementations
@@ -104,13 +151,18 @@ Here, **plugin** means an injected implementation, not necessarily dynamic loadi
 Design methods from application workflows, not vendor APIs. An interface should give newcomers a quick inventory of the application's interactions with its data service:
 
 ```ts
-interface Farmer { id: string; name: string }
-interface NewFarmer { name: string }
+interface Farmer {
+  id: string;
+  name: string;
+}
+interface NewFarmer {
+  name: string;
+}
 
 interface FarmersData {
-  listFarmers(): Promise<Farmer[]>
-  getFarmer(id: string): Promise<Farmer | undefined>
-  addFarmer(input: NewFarmer): Promise<{ id: string }>
+  listFarmers(): Promise<Farmer[]>;
+  getFarmer(id: string): Promise<Farmer | undefined>;
+  addFarmer(input: NewFarmer): Promise<{ id: string }>;
 }
 ```
 
@@ -120,38 +172,38 @@ Startup is the **composition root**: it loads configuration, selects implementat
 
 ```ts
 // server/src/data-modules/index.ts
-import type { NotesData } from './notes-data.js'
-import { createFileNotesData } from './file-notes-data.js'
-import { createAzureNotesData } from './azure-notes-data.js'
+import type { NotesData } from './notes-data.js';
+import { createFileNotesData } from './file-notes-data.js';
+import { createAzureNotesData } from './azure-notes-data.js';
 
 export type NotesConfig =
   | { module: 'filesystem'; dataDir: string }
   | {
-      module: 'azure'
-      azure: { accountName: string; containerName: string }
-    }
+      module: 'azure';
+      azure: { accountName: string; containerName: string };
+    };
 
 export function initializeNotesData(config: NotesConfig): NotesData {
   switch (config.module) {
     case 'filesystem':
-      return createFileNotesData({ dataDir: config.dataDir })
+      return createFileNotesData({ dataDir: config.dataDir });
     case 'azure':
-      return createAzureNotesData(config.azure)
+      return createAzureNotesData(config.azure);
   }
 }
 ```
 
 ```ts
-// server/src/server.ts — illustrative wiring after config validation
-const config = await loadConfig({ defaultsFile })
-const notes = initializeNotesData(config.storage)
-const sessions = await createSessionManager(config.sessions)
+// Notes application wiring after the canonical config pipeline in §3.
+// config and selection come from that pipeline; initialization starts here.
+const notes = initializeNotesData(config.storage);
+const sessions = await createSessionManager(config.sessions);
 const auth = createAuthService({
   ...config.auth,
   environmentType: config.environmentType,
   sessions,
-})
-const app = createApp(config, { notes, auth })
+});
+const app = createNotesApp(config, { notes, auth });
 ```
 
 A shared infrastructure library may own connection setup, credential handling, and SDK utilities. Each application's plugin owns its application-specific operations. Share infrastructure without forcing every service to adopt one generic repository interface.
@@ -166,8 +218,8 @@ Plugins owning connections, background tasks, or subscriptions should expose cle
 
 ```ts
 interface InitializedPlugin<T> {
-  operations: T
-  close(): Promise<void>
+  operations: T;
+  close(): Promise<void>;
 }
 ```
 
@@ -176,13 +228,13 @@ Use this wrapper only when lifecycle management is needed; simple factories do n
 For streaming plugins, document backpressure, cancellation, stream errors, and publication completion. A writable stream accepting bytes does not necessarily mean a cloud object has been durably published:
 
 ```ts
-import type { Writable } from 'node:stream'
+import type { Writable } from 'node:stream';
 
 interface Upload {
-  id: string
-  writable: Writable
-  completed: Promise<void> // resolves after successful publication
-  abort(): Promise<void>  // cancels and cleans up incomplete publication
+  id: string;
+  writable: Writable;
+  completed: Promise<void>; // resolves after successful publication
+  abort(): Promise<void>; // cancels and cleans up incomplete publication
 }
 ```
 
@@ -190,55 +242,60 @@ The handler should await both byte transfer and publication before reporting suc
 
 ### Example: persistence contract and route composition
 
+This is an independent items application, not the notes application above. Its `createApp` receives `{ items, authenticate }`; the notes application's `createNotesApp` receives `{ notes, auth }`. Both factories require initialized dependencies and neither selects storage implementations.
+
 ```ts
 // server/src/data-modules/items-data.ts
-export interface Item { id: string; title: string }
+export interface Item {
+  id: string;
+  title: string;
+}
 export interface ItemsData {
-  list(userId: string): Promise<Item[]>
+  list(userId: string): Promise<Item[]>;
 }
 ```
 
 ```ts
 // server/src/routes/items/index.ts
-import { Hono } from 'hono'
-import type { ItemsData } from '../../data-modules/items-data.js'
+import { Hono } from 'hono';
+import type { ItemsData } from '../../data-modules/items-data.js';
 
-export type HttpEnv = { Variables: { userId: string } }
+export type HttpEnv = { Variables: { userId: string } };
 
 export function itemRoutes(items: ItemsData) {
-  const routes = new Hono<HttpEnv>()
-  routes.get('/', async c => c.json(await items.list(c.get('userId'))))
-  return routes
+  const routes = new Hono<HttpEnv>();
+  routes.get('/', async (c) => c.json(await items.list(c.get('userId'))));
+  return routes;
 }
 ```
 
 ```ts
 // server/src/app.ts
-import { Hono } from 'hono'
-import type { MiddlewareHandler } from 'hono'
-import type { AppConfig } from './config/index.js'
-import type { ItemsData } from './data-modules/items-data.js'
-import { itemRoutes, type HttpEnv } from './routes/items/index.js'
+import { Hono } from 'hono';
+import type { MiddlewareHandler } from 'hono';
+import type { AppConfig } from './config/index.js';
+import type { ItemsData } from './data-modules/items-data.js';
+import { itemRoutes, type HttpEnv } from './routes/items/index.js';
 
 interface Dependencies {
-  items: ItemsData
-  authenticate: MiddlewareHandler<HttpEnv> // verifies session and sets userId
+  items: ItemsData;
+  authenticate: MiddlewareHandler<HttpEnv>; // verifies session and sets userId
 }
 
 export function createApp(config: AppConfig, deps: Dependencies) {
-  const app = new Hono<HttpEnv>()
-  const api = config.api.basePath
+  const app = new Hono<HttpEnv>();
+  const api = config.api.basePath;
 
-  app.get(`${api}/health`, c => c.json({ status: 'ok' }))
-  app.use(`${api}/items`, deps.authenticate)
-  app.use(`${api}/items/*`, deps.authenticate)
-  app.route(`${api}/items`, itemRoutes(deps.items))
-  app.notFound(c => c.json({ error: 'Not found' }, 404))
+  app.get(`${api}/health`, (c) => c.json({ status: 'ok' }));
+  app.use(`${api}/items`, deps.authenticate);
+  app.use(`${api}/items/*`, deps.authenticate);
+  app.route(`${api}/items`, itemRoutes(deps.items));
+  app.notFound((c) => c.json({ error: 'Not found' }, 404));
   app.onError((error, c) => {
-    console.error(error) // replace with structured, redacted logging
-    return c.json({ error: 'Internal server error' }, 500)
-  })
-  return app
+    console.error(error); // replace with structured, redacted logging
+    return c.json({ error: 'Internal server error' }, 500);
+  });
+  return app;
 }
 ```
 
@@ -306,7 +363,7 @@ http:
 api:
   basePath: /api/v1
 auth:
-  googleClientId: "" # public identifier, not a client secret
+  googleClientId: '' # public identifier, not a client secret
   magicLinkBaseUrl: https://app.example.com
   mailFrom: Example <no-reply@example.com>
 config:
@@ -354,54 +411,64 @@ Because selection precedes full validation, selection code must handle missing/i
 ```ts
 // Shared validator contract, compatible with Katavti's validation engine.
 export interface ConfigValidator {
-  key: string // absolute path in the merged config
-  validate(key: string, value: unknown): {
-    level: 'valid' | 'warning' | 'error' | 'fatal'
-    message?: string
-  }
+  key: string; // absolute path in the merged config
+  validate(
+    key: string,
+    value: unknown,
+  ): {
+    level: 'valid' | 'warning' | 'error' | 'fatal';
+    message?: string;
+  };
 }
 ```
 
 ```ts
 // server/src/data-modules/filesystem-plugin.ts
-import type { ConfigValidator } from '../config/validation.js'
-import { createFileNotesData } from './file-notes-data.js'
+import type { ConfigValidator } from '../config/validation.js';
+import { createFileNotesData } from './file-notes-data.js';
 
 export function getConfigValidators(): ConfigValidator[] {
-  return [{
-    key: 'storage.dataDir',
-    validate: (_key, value) =>
-      typeof value === 'string' && value.trim() !== ''
-        ? { level: 'valid' }
-        : { level: 'fatal', message: 'must be a non-empty directory path' },
-  }]
+  return [
+    {
+      key: 'storage.dataDir',
+      validate: (_key, value) =>
+        typeof value === 'string' && value.trim() !== ''
+          ? { level: 'valid' }
+          : { level: 'fatal', message: 'must be a non-empty directory path' },
+    },
+  ];
 }
 
-export const initialize = createFileNotesData
+export const initialize = createFileNotesData;
 ```
 
 ```ts
 // Illustrative orchestration; loadCandidate/selectPlugins/normalizeConfig
 // are new project helpers, not existing Katavti exports.
-const candidate = await loadCandidate({ defaultsFile })
-const selection = selectPlugins(candidate) // { plugins, issues }
-const validators = [...coreValidators, ...crossPluginValidators]
+const candidate = await loadCandidate({ defaultsFile });
+const selection = selectPlugins(candidate); // { plugins, issues }
+const validators = [...coreValidators, ...crossPluginValidators];
 
 for (const plugin of selection.plugins) {
-  validators.push(...(plugin.getConfigValidators?.() ?? []))
+  validators.push(...(plugin.getConfigValidators?.() ?? []));
 }
 
-const results = runConfigValidators(candidate, validators)
+const results = runConfigValidators(candidate, validators);
 const issues = [
   ...selection.issues,
   ...results
-    .filter(result => result.level === 'error' || result.level === 'fatal')
-    .map(result => `${result.key}: ${result.message ?? 'invalid value'}`),
-]
-if (issues.length) throw new ConfigError(issues, results)
+    .filter((result) => result.level === 'error' || result.level === 'fatal')
+    .map((result) => `${result.key}: ${result.message ?? 'invalid value'}`),
+];
+if (issues.length) {
+  throw new ConfigError(issues, results);
+}
 
-const config = normalizeConfig(candidate)
-// Only now initialize plugins and start the application.
+const config = normalizeConfig(candidate);
+// Only now initialize selection.plugins with their validated config sections,
+// assemble the HTTP application, and start listening (see §2).
+// If loadConfig wraps this pipeline, it must collect plugin validators before
+// validation and return both validated config and the selected plugin bindings.
 ```
 
 If plugins can be mounted under different config sections, accept a config-path prefix in the validator factory instead of hardcoding `storage`. Collect validators in a deterministic order, once per configured plugin binding. Multiple validators for the same key may intentionally check different constraints; do not discard them by deduplicating keys.
@@ -425,20 +492,24 @@ Maintain **one authoritative validation pipeline**, composed from core and plugi
 ```ts
 // Example strict parser for an environment/CLI boundary.
 export function parseBoolean(key: string, value: string): boolean {
-  if (value === 'true') return true
-  if (value === 'false') return false
-  throw new Error(`${key}: must be true or false`)
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  throw new Error(`${key}: must be true or false`);
 }
 
 // Service configuration is explicit, not inferred from NODE_ENV.
 interface EmailOptions {
-  environmentType: 'dev' | 'prod'
-  sendMail?: (message: string) => Promise<void>
+  environmentType: 'dev' | 'prod';
+  sendMail?: (message: string) => Promise<void>;
 }
 
 export function assertEmailConfigured(options: EmailOptions) {
   if (options.environmentType === 'prod' && !options.sendMail) {
-    throw new Error('Email sign-in is not configured')
+    throw new Error('Email sign-in is not configured');
   }
 }
 ```
@@ -462,28 +533,38 @@ Configuration is a startup snapshot. Changing a mounted ConfigMap or Secret does
 ```ts
 // client/src/api/http.ts
 // Keep this path synchronized with server config, Ingress, and probes.
-export const API_BASE_PATH = '/api/v1'
+export const API_BASE_PATH = '/api/v1';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message) }
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
 }
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_PATH}${path}`, {
     ...init,
     credentials: 'include',
-  })
-  const body = await response.json()
-  if (!response.ok) throw new ApiError(body.error ?? 'Request failed', response.status)
-  return body as T // validate runtime response shape where needed
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new ApiError(body.error ?? 'Request failed', response.status);
+  }
+  return body as T; // validate runtime response shape where needed
 }
 ```
 
 ```ts
 // client/src/api/items.ts
-import { request } from './http'
-export interface Item { id: string; title: string }
-export const itemsApi = { list: () => request<Item[]>('/items') }
+import { request } from './http';
+export interface Item {
+  id: string;
+  title: string;
+}
+export const itemsApi = { list: () => request<Item[]>('/items') };
 ```
 
 Use relative URLs by default. Service DNS names and internal ports are for pods, not browsers. One public origin simplifies cookies, CORS, OAuth origins, and deployment portability. If cross-origin calls are genuinely needed, configure a consistent base URL for **all** API adapters and exact credentialed CORS behavior; do not rely on a wildcard.
@@ -512,8 +593,8 @@ Run the API watcher and Vite concurrently. Vite proxies API traffic so the brows
 
 ```ts
 // client/vite.config.ts
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue()],
@@ -525,7 +606,7 @@ export default defineConfig({
     watch: { usePolling: true }, // use when mounted files need it
     proxy: { '/api': { target: 'http://127.0.0.1:3030' } },
   },
-})
+});
 ```
 
 ```json
@@ -542,16 +623,16 @@ export default defineConfig({
 
 ### Live development inside Kubernetes
 
-Keep Services, Ingress, hostnames, and API paths the same as production. Replace only runtime images/commands and source/config mounts:
+Keep the same routing topology, Service names/ports, and API paths as production. Use environment-specific hostnames and TLS settings (for example `example.local` in development and `app.example.com` in production). Overlays also replace runtime images/commands, source/config mounts, credentials, and data resources as appropriate:
 
-| Component | Development | Production |
-| --- | --- | --- |
-| API | Node image + source + `tsx watch` | immutable image + compiled Node entry point |
-| Client | Node image + source + Vite HMR | immutable nginx image + static assets |
+| Component     | Development                           | Production                                  |
+| ------------- | ------------------------------------- | ------------------------------------------- |
+| API           | Node image + source + `tsx watch`     | immutable image + compiled Node entry point |
+| Client        | Node image + source + Vite HMR        | immutable nginx image + static assets       |
 | Configuration | explicit `dev` + development defaults | explicit `prod` + complete config + secrets |
-| Source | mounted or synchronized | absent |
-| Data | isolated disposable or dev PVC | durable PVC/external backend + backups |
-| Exposure | private workstation cluster | TLS and production security controls |
+| Source        | mounted or synchronized               | absent                                      |
+| Data          | isolated disposable or dev PVC        | durable PVC/external backend + backups      |
+| Exposure      | private workstation cluster           | TLS and production security controls        |
 
 Use Kustomize overlays or equivalent explicit environment separation. Do not depend on applying competing Deployment YAML files in the correct order. Katavti currently applies `dev-deployments.yaml` over `base.yaml`; overlays are the recommended reusable improvement.
 
@@ -578,7 +659,7 @@ spec:
             - name: APP_SERVER_HOST
               value: 0.0.0.0
             - name: APP_SERVER_PORT
-              value: "3030"
+              value: '3030'
             - name: APP_STORAGE_DATA_DIR
               value: /data/notes
             - name: APP_SESSIONS_FILESYSTEM_DIRECTORY
@@ -733,24 +814,24 @@ spec:
             - name: APP_CONFIG_SECRET_FILES
               value: /etc/example/secrets/auth.yaml
           resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: "1", memory: 512Mi}
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: '1', memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
           startupProbe:
-            httpGet: {path: /api/v1/health, port: http}
+            httpGet: { path: /api/v1/health, port: http }
             periodSeconds: 2
             failureThreshold: 30
           readinessProbe:
-            httpGet: {path: /api/v1/health, port: http}
+            httpGet: { path: /api/v1/health, port: http }
           livenessProbe:
-            httpGet: {path: /api/v1/health, port: http}
+            httpGet: { path: /api/v1/health, port: http }
           volumeMounts:
-            - {name: config, mountPath: /etc/example/config, readOnly: true}
-            - {name: secrets, mountPath: /etc/example/secrets, readOnly: true}
-            - {name: data, mountPath: /data}
+            - { name: config, mountPath: /etc/example/config, readOnly: true }
+            - { name: secrets, mountPath: /etc/example/secrets, readOnly: true }
+            - { name: data, mountPath: /data }
       volumes:
         - name: config
           configMap:
@@ -767,9 +848,9 @@ kind: Service
 metadata:
   name: example-server
 spec:
-  selector: {app: example-server}
+  selector: { app: example-server }
   ports:
-    - {name: http, port: 80, targetPort: http}
+    - { name: http, port: 80, targetPort: http }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -778,31 +859,31 @@ metadata:
 spec:
   replicas: 2
   selector:
-    matchLabels: {app: example-client}
+    matchLabels: { app: example-client }
   template:
     metadata:
-      labels: {app: example-client}
+      labels: { app: example-client }
     spec:
       enableServiceLinks: false
       containers:
         - name: client
           image: registry.example.com/example-client:RELEASE
           ports:
-            - {name: http, containerPort: 8080}
+            - { name: http, containerPort: 8080 }
           resources:
-            requests: {cpu: 50m, memory: 32Mi}
-            limits: {cpu: 500m, memory: 128Mi}
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
           readinessProbe:
-            httpGet: {path: /, port: http}
+            httpGet: { path: /, port: http }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: example-client
 spec:
-  selector: {app: example-client}
+  selector: { app: example-client }
   ports:
-    - {name: http, port: 80, targetPort: http}
+    - { name: http, port: 80, targetPort: http }
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -822,13 +903,13 @@ spec:
             backend:
               service:
                 name: example-server
-                port: {name: http}
+                port: { name: http }
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: example-client
-                port: {name: http}
+                port: { name: http }
 ```
 
 Set `enableServiceLinks: false` to prevent Kubernetes legacy Service environment variables from colliding with application configuration names. Katavti explicitly overrides `KATAVTI_SERVER_PORT` because its Service name generates a variable with that name; disabling service links removes that accidental coupling.
@@ -873,8 +954,8 @@ Before accepting a change:
 ### Example: test precedence without ambient state
 
 ```ts
-import { expect, it } from 'vitest'
-import { loadConfig } from '../../src/config/index.js'
+import { expect, it } from 'vitest';
+import { loadConfig } from '../../src/config/index.js';
 
 it('CLI overrides environment and YAML', async () => {
   // Fixture files must contain all required settings for the selected mode.
@@ -883,9 +964,9 @@ it('CLI overrides environment and YAML', async () => {
     cwd: '/tmp/test-fixture',
     env: { APP_SERVER_PORT: '4040' },
     argv: ['--server.port=5050'],
-  })
-  expect(config.server.port).toBe(5050)
-})
+  });
+  expect(config.server.port).toBe(5050);
+});
 ```
 
 Also test malformed booleans, unknown keys, missing files, YAML-only environment changes, production default exclusion, conditional backend requirements, and absence of development authentication routes in production. Use temporary fixtures in real tests, not fixed shared `/tmp` directories.
@@ -893,6 +974,7 @@ Also test malformed booleans, unknown keys, missing files, YAML-only environment
 ```bash
 npm ci
 npm --prefix client ci
+npm run format:check
 npm test
 npm run build
 kubectl apply --dry-run=server -k kubernetes/overlays/prod
@@ -909,20 +991,20 @@ Run deployment commands only against the intended context/namespace after review
 
 This section records the inspected implementation, not a claim about a running cluster.
 
-| Observation | Source | Recommendation |
-| --- | --- | --- |
-| App factory and startup are separate; routes accept adapters, but `createApp` can still select/construct note storage. | `server/src/app.ts`, `server/src/server.ts`, `server/src/routes/` | Retain named dependency injection; move plugin selection/initialization to startup and require initialized HTTP dependencies. |
-| Note storage and session backends are independently selected. | `server/src/data-modules/`, `server/src/session-modules/` | Retain this separation; account for both in persistence/scaling. |
-| Active validators are inline in the loader; another exported validator set is not used by it and has different rules. Plugin validator collection is not currently implemented. | `server/src/config/index.ts`, `server/src/config/validators.ts` | Consolidate into one pipeline; separate loading from validation so selected plugins can optionally contribute validators before validation and initialization. |
-| Boolean env/CLI parsing maps every value other than case-insensitive `true` to false. Unknown CLI keys are accepted. Some auth fields are not fully validated/normalized. | `server/src/config/index.ts` | Strict parsing, unknown-key rejection, complete schema and runtime shape. |
-| Production exclusion is selected before reading configured files. | `server/src/config/index.ts` | Explicit external mode selection and disagreement tests. |
-| Fake login and secure cookies use application mode; development email-link disclosure still uses ambient `NODE_ENV`. | `server/src/routes/auth/index.ts`, `server/src/services/auth-service.ts` | Use validated mode consistently for all security-sensitive behavior. |
-| Identity header config is validated but does not authenticate requests. | `server/src/app.ts`, `server/test/unit/app-config.test.ts` | Do not document it as trusted identity; remove unused config in new projects. |
-| Server API prefix is configurable; client URLs, probes, and Ingress use fixed `/api/v1beta`. | `client/src/api/`, `kubernetes/` | Coordinate this contract and test it. |
-| Base Kubernetes Deployment uses development defaults, HTTP-only local Ingress, `latest` images, and `emptyDir`. Docker `NODE_ENV=production` does not change application mode. | `kubernetes/base.yaml`, `kubernetes/ingress.yaml`, `server/Dockerfile` | Treat as local demonstration, not production-ready Kubernetes. |
-| Dev Deployments mount a workstation-specific source path and host dependencies. | `kubernetes/dev-deployments.yaml`, `client/vite.config.ts` | Local-only, parameterized dev overlay; verify mounts, watching, dependencies, and HMR. |
-| Existing production automation targets Docker Compose/Caddy with Ansible, not Kubernetes. | `ansible/README.md`, `ansible/roles/katavti/templates/` | Reuse explicit runtime config and immutable-image ideas, not an assumption that production K8s is already supplied. |
-| Startup has no explicit signal-draining handlers; health does not check dependencies. | `server/src/server.ts`, `server/src/routes/health/index.ts` | Add shutdown and operational health contracts before production rollout. |
+| Observation                                                                                                                                                                     | Source                                                                   | Recommendation                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App factory and startup are separate; routes accept adapters, but `createApp` can still select/construct note storage.                                                          | `server/src/app.ts`, `server/src/server.ts`, `server/src/routes/`        | Retain named dependency injection; move plugin selection/initialization to startup and require initialized HTTP dependencies.                                  |
+| Note storage and session backends are independently selected.                                                                                                                   | `server/src/data-modules/`, `server/src/session-modules/`                | Retain this separation; account for both in persistence/scaling.                                                                                               |
+| Active validators are inline in the loader; another exported validator set is not used by it and has different rules. Plugin validator collection is not currently implemented. | `server/src/config/index.ts`, `server/src/config/validators.ts`          | Consolidate into one pipeline; separate loading from validation so selected plugins can optionally contribute validators before validation and initialization. |
+| Boolean env/CLI parsing maps every value other than case-insensitive `true` to false. Unknown CLI keys are accepted. Some auth fields are not fully validated/normalized.       | `server/src/config/index.ts`                                             | Strict parsing, unknown-key rejection, complete schema and runtime shape.                                                                                      |
+| Production exclusion is selected before reading configured files.                                                                                                               | `server/src/config/index.ts`                                             | Explicit external mode selection and disagreement tests.                                                                                                       |
+| Fake login and secure cookies use application mode; development email-link disclosure still uses ambient `NODE_ENV`.                                                            | `server/src/routes/auth/index.ts`, `server/src/services/auth-service.ts` | Use validated mode consistently for all security-sensitive behavior.                                                                                           |
+| Identity header config is validated but does not authenticate requests.                                                                                                         | `server/src/app.ts`, `server/test/unit/app-config.test.ts`               | Do not document it as trusted identity; remove unused config in new projects.                                                                                  |
+| Server API prefix is configurable; client URLs, probes, and Ingress use fixed `/api/v1beta`.                                                                                    | `client/src/api/`, `kubernetes/`                                         | Coordinate this contract and test it.                                                                                                                          |
+| Base Kubernetes Deployment uses development defaults, HTTP-only local Ingress, `latest` images, and `emptyDir`. Docker `NODE_ENV=production` does not change application mode.  | `kubernetes/base.yaml`, `kubernetes/ingress.yaml`, `server/Dockerfile`   | Treat as local demonstration, not production-ready Kubernetes.                                                                                                 |
+| Dev Deployments mount a workstation-specific source path and host dependencies.                                                                                                 | `kubernetes/dev-deployments.yaml`, `client/vite.config.ts`               | Local-only, parameterized dev overlay; verify mounts, watching, dependencies, and HMR.                                                                         |
+| Existing production automation targets Docker Compose/Caddy with Ansible, not Kubernetes.                                                                                       | `ansible/README.md`, `ansible/roles/katavti/templates/`                  | Reuse explicit runtime config and immutable-image ideas, not an assumption that production K8s is already supplied.                                            |
+| Startup has no explicit signal-draining handlers; health does not check dependencies.                                                                                           | `server/src/server.ts`, `server/src/routes/health/index.ts`              | Add shutdown and operational health contracts before production rollout.                                                                                       |
 
 ## References
 
